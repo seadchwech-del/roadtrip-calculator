@@ -1,7 +1,4 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 import {
   Car,
   Fuel,
@@ -31,12 +28,6 @@ import {
   Loader2
 } from 'lucide-react';
 
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
 // 預設自駕行程範本
 const PRESETS = [
   {
@@ -46,15 +37,15 @@ const PRESETS = [
     passengers: 4,
     currency: 'JPY',
     isRental: true,
-    rentalCost: 36000, // 日幣
+    rentalCost: 36000,
     distanceKm: 280,
     fuelEfficiency: 16.5,
-    fuelPrice: 175, // 日本 Regular 汽油約 175 円/L
-    tollCost: 2600, // 沖繩自動車道通行費
+    fuelPrice: 175,
+    tollCost: 2600,
     parkingCost: 3500,
     accommodation: 64000,
     food: 42000,
-    ticket: 14000, // 美麗海水族館等
+    ticket: 14000,
     misc: 8000,
     itinerary: [
       { id: '1', day: 1, time: '11:30', spot: '那霸機場 OTS / Toyota 取車', note: '檢查 ETC 卡與保險安心險', category: 'drive' },
@@ -76,7 +67,7 @@ const PRESETS = [
     distanceKm: 560,
     fuelEfficiency: 14.0,
     fuelPrice: 175,
-    tollCost: 7800, // 道央道高速費 (可配 HEP)
+    tollCost: 7800,
     parkingCost: 2500,
     accommodation: 98000,
     food: 68000,
@@ -140,15 +131,16 @@ const PRESETS = [
   }
 ];
 
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [lastSavedTime, setLastSavedTime] = useState(null);
+const STORAGE_KEY = 'roadtrip_planner_data_v1';
 
-  // 幣別與匯率設定 (1 JPY = ? TWD，可自訂調整)
-  const [currency, setCurrency] = useState('JPY'); // 'JPY' | 'TWD'
-  const [exchangeRate, setExchangeRate] = useState(0.215); // 預設 1 日圓 = 0.215 台幣
+export default function App() {
+  const [isSaving, setIsSaving] = useState(false);
+  const [lastSavedTime, setLastSavedTime] = useState(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // 幣別與匯率
+  const [currency, setCurrency] = useState('JPY');
+  const [exchangeRate, setExchangeRate] = useState(0.215);
 
   // 基本資訊
   const [tripName, setTripName] = useState('【日本】沖繩悠閒環島 4 天 3 夜');
@@ -156,7 +148,7 @@ export default function App() {
   const [days, setDays] = useState(4);
   const [passengers, setPassengers] = useState(4);
 
-  // 車輛與行車設定 (油耗以 km/L 計算)
+  // 車輛與行車
   const [isRental, setIsRental] = useState(true);
   const [rentalCost, setRentalCost] = useState(36000);
   const [distanceKm, setDistanceKm] = useState(280);
@@ -165,123 +157,90 @@ export default function App() {
   const [tollCost, setTollCost] = useState(2600);
   const [parkingCost, setParkingCost] = useState(3500);
 
-  // 其他花費設定
+  // 其他費用
   const [accommodation, setAccommodation] = useState(64000);
   const [food, setFood] = useState(42000);
   const [ticket, setTicket] = useState(14000);
   const [misc, setMisc] = useState(8000);
 
-  // 行程規劃清單
+  // 行程站點
   const [itinerary, setItinerary] = useState(PRESETS[0].itinerary);
   const [newSpot, setNewSpot] = useState({ day: 1, time: '10:00', spot: '', note: '', category: 'spot' });
   const [copied, setCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState('overview');
 
-  // 貨幣符號與標記
-  const currSymbol = currency === 'JPY' ? '¥' : 'NT$';
-  const currUnit = currency === 'JPY' ? '円' : '元';
-
+  // 1. 初始化讀取 LocalStorage
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        console.error("Auth init error:", err);
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const data = JSON.parse(saved);
+        if (data.tripName !== undefined) setTripName(data.tripName);
+        if (data.destination !== undefined) setDestination(data.destination);
+        if (data.days !== undefined) setDays(data.days);
+        if (data.passengers !== undefined) setPassengers(data.passengers);
+        if (data.currency !== undefined) setCurrency(data.currency);
+        if (data.exchangeRate !== undefined) setExchangeRate(data.exchangeRate);
+        if (data.isRental !== undefined) setIsRental(data.isRental);
+        if (data.rentalCost !== undefined) setRentalCost(data.rentalCost);
+        if (data.distanceKm !== undefined) setDistanceKm(data.distanceKm);
+        if (data.fuelEfficiency !== undefined) setFuelEfficiency(data.fuelEfficiency);
+        if (data.fuelPrice !== undefined) setFuelPrice(data.fuelPrice);
+        if (data.tollCost !== undefined) setTollCost(data.tollCost);
+        if (data.parkingCost !== undefined) setParkingCost(data.parkingCost);
+        if (data.accommodation !== undefined) setAccommodation(data.accommodation);
+        if (data.food !== undefined) setFood(data.food);
+        if (data.ticket !== undefined) setTicket(data.ticket);
+        if (data.misc !== undefined) setMisc(data.misc);
+        if (data.itinerary !== undefined) setItinerary(data.itinerary);
       }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
+    } catch (e) {
+      console.error("Failed to load local storage:", e);
+    } finally {
+      setIsLoaded(true);
+    }
   }, []);
 
+  // 2. 異動時自動存檔至 LocalStorage (防抖)
   useEffect(() => {
-    if (!user) return;
+    if (!isLoaded) return;
 
-    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tripPlan', 'current');
-    const unsubscribe = onSnapshot(
-      userDocRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data.tripName !== undefined) setTripName(data.tripName);
-          if (data.destination !== undefined) setDestination(data.destination);
-          if (data.days !== undefined) setDays(data.days);
-          if (data.passengers !== undefined) setPassengers(data.passengers);
-          if (data.currency !== undefined) setCurrency(data.currency);
-          if (data.exchangeRate !== undefined) setExchangeRate(data.exchangeRate);
-          if (data.isRental !== undefined) setIsRental(data.isRental);
-          if (data.rentalCost !== undefined) setRentalCost(data.rentalCost);
-          if (data.distanceKm !== undefined) setDistanceKm(data.distanceKm);
-          if (data.fuelEfficiency !== undefined) setFuelEfficiency(data.fuelEfficiency);
-          if (data.fuelPrice !== undefined) setFuelPrice(data.fuelPrice);
-          if (data.tollCost !== undefined) setTollCost(data.tollCost);
-          if (data.parkingCost !== undefined) setParkingCost(data.parkingCost);
-          if (data.accommodation !== undefined) setAccommodation(data.accommodation);
-          if (data.food !== undefined) setFood(data.food);
-          if (data.ticket !== undefined) setTicket(data.ticket);
-          if (data.misc !== undefined) setMisc(data.misc);
-          if (data.itinerary !== undefined) setItinerary(data.itinerary);
-        }
-        setIsLoaded(true);
-      },
-      (error) => {
-        console.error("Load trip data error:", error);
-        setIsLoaded(true);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [user]);
-
-  useEffect(() => {
-    if (!user || !isLoaded) return;
-
-    const timer = setTimeout(async () => {
-      setIsSaving(true);
+    setIsSaving(true);
+    const timer = setTimeout(() => {
       try {
-        const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tripPlan', 'current');
-        await setDoc(
-          userDocRef,
-          {
-            tripName,
-            destination,
-            days,
-            passengers,
-            currency,
-            exchangeRate,
-            isRental,
-            rentalCost,
-            distanceKm,
-            fuelEfficiency,
-            fuelPrice,
-            tollCost,
-            parkingCost,
-            accommodation,
-            food,
-            ticket,
-            misc,
-            itinerary,
-            updatedAt: new Date().toISOString()
-          },
-          { merge: true }
-        );
+        const stateToSave = {
+          tripName,
+          destination,
+          days,
+          passengers,
+          currency,
+          exchangeRate,
+          isRental,
+          rentalCost,
+          distanceKm,
+          fuelEfficiency,
+          fuelPrice,
+          tollCost,
+          parkingCost,
+          accommodation,
+          food,
+          ticket,
+          misc,
+          itinerary
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
         setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-      } catch (err) {
-        console.error("Save trip data error:", err);
+      } catch (e) {
+        console.error("Failed to save to local storage:", e);
       } finally {
         setIsSaving(false);
       }
-    }, 600);
+    }, 500);
 
     return () => clearTimeout(timer);
   }, [
-    user, isLoaded, tripName, destination, days, passengers, currency, exchangeRate,
-    isRental, rentalCost, distanceKm, fuelEfficiency, fuelPrice, tollCost, parkingCost,
-    accommodation, food, ticket, misc, itinerary
+    isLoaded, tripName, destination, days, passengers, currency, exchangeRate,
+    isRental, rentalCost, distanceKm, fuelEfficiency, fuelPrice, tollCost,
+    parkingCost, accommodation, food, ticket, misc, itinerary
   ]);
 
   // 載入範本
@@ -290,9 +249,7 @@ export default function App() {
     setDestination(preset.destination);
     setDays(preset.days);
     setPassengers(preset.passengers);
-    if (preset.currency) {
-      setCurrency(preset.currency);
-    }
+    if (preset.currency) setCurrency(preset.currency);
     setIsRental(preset.isRental);
     setRentalCost(preset.rentalCost);
     setDistanceKm(preset.distanceKm);
@@ -307,61 +264,48 @@ export default function App() {
     setItinerary(preset.itinerary);
   };
 
-  // 核心計算 (支援 JPY <-> TWD 雙幣別即時換算)
+  const currSymbol = currency === 'JPY' ? '¥' : 'NT$';
+  const currUnit = currency === 'JPY' ? '円' : '元';
+
+  // 核心計算
   const calculations = useMemo(() => {
     const safeKm = Number(distanceKm) || 0;
     const safeEfficiency = Number(fuelEfficiency) > 0 ? Number(fuelEfficiency) : 1;
     const safeFuelPrice = Number(fuelPrice) || 0;
     const safeRate = Number(exchangeRate) > 0 ? Number(exchangeRate) : 0.215;
 
-    // 換算函式：轉換至對應的另一個幣別
     const convert = (amount) => {
-      if (currency === 'JPY') {
-        // JPY -> TWD
-        return Math.round(amount * safeRate);
-      } else {
-        // TWD -> JPY
-        return Math.round(amount / safeRate);
-      }
+      return currency === 'JPY'
+        ? Math.round(amount * safeRate)
+        : Math.round(amount / safeRate);
     };
 
-    // 油量公升數與油資
     const fuelLiters = safeKm / safeEfficiency;
     const totalFuelCost = Math.round(fuelLiters * safeFuelPrice);
-
-    // 車輛相關總成本
     const effectiveRental = isRental ? (Number(rentalCost) || 0) : 0;
     const drivingTotal = effectiveRental + totalFuelCost + (Number(tollCost) || 0) + (Number(parkingCost) || 0);
-
-    // 其他花費總計
     const otherTotal = (Number(accommodation) || 0) + (Number(food) || 0) + (Number(ticket) || 0) + (Number(misc) || 0);
-
-    // 總開銷與人均 (主幣別)
     const grandTotal = drivingTotal + otherTotal;
     const safePassengers = Math.max(1, Number(passengers) || 1);
     const perPersonCost = Math.round(grandTotal / safePassengers);
 
-    // 雙幣別換算總額與人均
     const convertedGrandTotal = convert(grandTotal);
     const convertedPerPersonCost = convert(perPersonCost);
     const convertedDrivingTotal = convert(drivingTotal);
     const convertedOtherTotal = convert(otherTotal);
 
-    // 每公里成本與每人每日平均
     const costPerKm = safeKm > 0 ? (grandTotal / safeKm).toFixed(1) : '0';
-    const convertedCostPerKm = safeKm > 0 ? (convertedGrandTotal / safeKm).toFixed(1) : '0';
     const perPersonPerDay = days > 0 ? Math.round(perPersonCost / days) : perPersonCost;
     const convertedPerPersonPerDay = days > 0 ? Math.round(convertedPerPersonCost / days) : convertedPerPersonCost;
 
-    // 開銷類別百分比清單
     const categories = [
-      { name: '車輛租賃', amount: effectiveRental, color: 'bg-blue-500', text: 'text-blue-600' },
-      { name: '行車油資', amount: totalFuelCost, color: 'bg-amber-500', text: 'text-amber-600' },
-      { name: '過路與停車', amount: (Number(tollCost) || 0) + (Number(parkingCost) || 0), color: 'bg-orange-400', text: 'text-orange-600' },
-      { name: '住宿費用', amount: Number(accommodation) || 0, color: 'bg-emerald-500', text: 'text-emerald-600' },
-      { name: '餐飲美食', amount: Number(food) || 0, color: 'bg-rose-500', text: 'text-rose-600' },
-      { name: '門票活動', amount: Number(ticket) || 0, color: 'bg-purple-500', text: 'text-purple-600' },
-      { name: '其他雜支', amount: Number(misc) || 0, color: 'bg-slate-400', text: 'text-slate-600' },
+      { name: '車輛租賃', amount: effectiveRental, color: 'bg-blue-500' },
+      { name: '行車油資', amount: totalFuelCost, color: 'bg-amber-500' },
+      { name: '過路與停車', amount: (Number(tollCost) || 0) + (Number(parkingCost) || 0), color: 'bg-orange-400' },
+      { name: '住宿費用', amount: Number(accommodation) || 0, color: 'bg-emerald-500' },
+      { name: '餐飲美食', amount: Number(food) || 0, color: 'bg-rose-500' },
+      { name: '門票活動', amount: Number(ticket) || 0, color: 'bg-purple-500' },
+      { name: '其他雜支', amount: Number(misc) || 0, color: 'bg-slate-400' },
     ].filter(item => item.amount > 0);
 
     return {
@@ -376,7 +320,6 @@ export default function App() {
       perPersonCost,
       convertedPerPersonCost,
       costPerKm,
-      convertedCostPerKm,
       perPersonPerDay,
       convertedPerPersonPerDay,
       categories,
@@ -387,7 +330,6 @@ export default function App() {
     tollCost, parkingCost, accommodation, food, ticket, misc, passengers, days, currency, exchangeRate
   ]);
 
-  // 新增景點
   const handleAddSpot = (e) => {
     e.preventDefault();
     if (!newSpot.spot.trim()) return;
@@ -402,12 +344,10 @@ export default function App() {
     setNewSpot({ ...newSpot, spot: '', note: '' });
   };
 
-  // 刪除景點
   const handleDeleteSpot = (id) => {
     setItinerary(itinerary.filter(item => item.id !== id));
   };
 
-  // 複製行程摘要至剪貼簿 (同時輸出日幣與台幣金額)
   const handleCopySummary = () => {
     const isJpy = currency === 'JPY';
     const mainSym = isJpy ? '¥' : 'NT$';
@@ -418,10 +358,10 @@ export default function App() {
 💱 計價幣別：${currency} (匯率 1 JPY = ${exchangeRate} TWD)
 💰 總開銷預估：${mainSym} ${calculations.grandTotal.toLocaleString()} (約 ${altSym} ${calculations.convertedGrandTotal.toLocaleString()})
 👥 每人均攤：${mainSym} ${calculations.perPersonCost.toLocaleString()} (約 ${altSym} ${calculations.convertedPerPersonCost.toLocaleString()})
-📅 每人每日平均：約 ${mainSym} ${calculations.perPersonPerDay.toLocaleString()} (約 ${altSym} ${calculations.convertedPerPersonPerDay.toLocaleString()})
+📅 每人每日平均：約 ${mainSym} ${calculations.perPersonPerDay.toLocaleString()}
 ⛽ 預估行駛：${distanceKm} km (耗油約 ${calculations.fuelLiters} L，油資 ${mainSym} ${calculations.totalFuelCost.toLocaleString()})
-🚙 交通租車通行費：${mainSym} ${calculations.drivingTotal.toLocaleString()} (約 ${altSym} ${calculations.convertedDrivingTotal.toLocaleString()})
-🏨 住宿餐飲生活：${mainSym} ${calculations.otherTotal.toLocaleString()} (約 ${altSym} ${calculations.convertedOtherTotal.toLocaleString()})`;
+🚙 交通租車通行費：${mainSym} ${calculations.drivingTotal.toLocaleString()}
+🏨 住宿餐飲生活：${mainSym} ${calculations.otherTotal.toLocaleString()}`;
 
     const textArea = document.createElement("textarea");
     textArea.value = text;
@@ -447,8 +387,12 @@ export default function App() {
               <Car className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-            {/* 自動儲存狀態標籤 */}
+              <h1 className="font-bold text-base sm:text-lg text-slate-900 leading-tight">自駕旅行開銷試算</h1>
+              <p className="text-[11px] text-slate-500">Road Trip Planner & Calculator</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 sm:gap-3">
             <div className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg bg-slate-100 text-slate-600 border border-slate-200">
               {isSaving ? (
                 <>
@@ -459,7 +403,7 @@ export default function App() {
                 <>
                   <Cloud className="w-3.5 h-3.5 text-emerald-600" />
                   <span className="font-medium text-slate-700">
-                    {lastSavedTime ? `已自動儲存 (${lastSavedTime})` : '自動儲存已就緒'}
+                    {lastSavedTime ? `已存檔 (${lastSavedTime})` : '自動存檔就緒'}
                   </span>
                 </>
               )}
@@ -468,17 +412,15 @@ export default function App() {
             <button
               onClick={handleCopySummary}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg border border-slate-300 hover:bg-slate-100 transition-colors text-slate-700"
-              title="複製行程開銷摘要"
             >
               {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Share2 className="w-4 h-4" />}
-              <span>{copied ? '已複製摘要' : '分享行程'}</span>
+              <span>{copied ? '已複製' : '分享行程'}</span>
             </button>
           </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {}
         {/* 幣別切換與匯率自訂控制列 */}
         <div className="mb-4 bg-gradient-to-r from-slate-900 via-indigo-900 to-slate-900 p-3.5 sm:p-4 rounded-2xl text-white shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
@@ -491,22 +433,19 @@ export default function App() {
                 <span>主要幣別：{currency === 'JPY' ? '日圓 (JPY ¥)' : '新台幣 (TWD NT$)'}</span>
                 <span className="text-slate-400 font-normal text-xs">|</span>
                 <span className="text-xs text-emerald-300 font-normal">
-                  1 JPY ≈ {exchangeRate} TWD ({currency === 'JPY' ? `1 TWD ≈ ${(1 / exchangeRate).toFixed(1)} JPY` : ''})
+                  1 JPY ≈ {exchangeRate} TWD
                 </span>
               </div>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto justify-start sm:justify-end">
-            {/* 幣別切換按鈕 */}
             <div className="inline-flex bg-white/10 p-1 rounded-xl border border-white/15">
               <button
                 type="button"
                 onClick={() => setCurrency('JPY')}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                  currency === 'JPY'
-                    ? 'bg-rose-500 text-white shadow-sm'
-                    : 'text-slate-300 hover:text-white'
+                  currency === 'JPY' ? 'bg-rose-500 text-white shadow-sm' : 'text-slate-300 hover:text-white'
                 }`}
               >
                 🇯🇵 日圓 JPY (¥)
@@ -515,16 +454,13 @@ export default function App() {
                 type="button"
                 onClick={() => setCurrency('TWD')}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                  currency === 'TWD'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-slate-300 hover:text-white'
+                  currency === 'TWD' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-300 hover:text-white'
                 }`}
               >
                 🇹🇼 台幣 TWD (NT$)
               </button>
             </div>
 
-            {/* 匯率輸入框 */}
             <div className="flex items-center gap-1.5 bg-white/10 px-2.5 py-1 rounded-xl border border-white/15 text-xs">
               <span className="text-slate-300">1 JPY =</span>
               <input
@@ -534,7 +470,6 @@ export default function App() {
                 value={exchangeRate}
                 onChange={(e) => setExchangeRate(parseFloat(e.target.value) || 0.215)}
                 className="w-16 px-1.5 py-0.5 bg-white/20 text-white rounded font-mono font-bold text-center focus:outline-none focus:ring-1 focus:ring-amber-300"
-                title="自訂匯率 (台幣/日圓)"
               />
               <span className="text-slate-300">TWD</span>
             </div>
@@ -545,7 +480,7 @@ export default function App() {
         <div className="mb-6 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-sm text-slate-600 font-medium">
             <Sparkles className="w-4 h-4 text-indigo-500" />
-            <span>自駕路線範本（含台日推薦）：</span>
+            <span>自駕路線範本：</span>
           </div>
           <div className="flex flex-wrap gap-2">
             {PRESETS.map((p, idx) => (
@@ -555,7 +490,7 @@ export default function App() {
                 className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-all border ${
                   p.currency === 'JPY'
                     ? 'bg-rose-50/70 hover:bg-rose-100/80 text-rose-700 border-rose-200'
-                    : 'bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 border-slate-200 hover:border-indigo-200'
+                    : 'bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 border-slate-200'
                 }`}
               >
                 {p.name}
@@ -564,13 +499,13 @@ export default function App() {
           </div>
         </div>
 
-        {/* 主畫面網格：左側輸入表單 + 右側即時彙整 */}
+        {/* 主畫面網格 */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           
-          {/* ================= 左側：輸入表單區塊 (7 欄寬) ================= */}
+          {/* 左側：輸入表單區塊 */}
           <div className="lg:col-span-7 space-y-6">
 
-            {/* 1. 行程基本設定 */}
+            {/* 1. 基本資訊 */}
             <section className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm">
               <div className="flex items-center gap-2 pb-3 mb-4 border-b border-slate-100">
                 <Navigation className="w-4 h-4 text-blue-600" />
@@ -586,19 +521,17 @@ export default function App() {
                     value={tripName}
                     onChange={(e) => setTripName(e.target.value)}
                     className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                    placeholder="例：日本沖繩海島 4 天 3 夜自駕"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
-                    主要目的地 / 區域
+                    主要目的地
                   </label>
                   <input
                     type="text"
                     value={destination}
                     onChange={(e) => setDestination(e.target.value)}
                     className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                    placeholder="例：日本沖繩 (那霸/名護)"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -636,8 +569,7 @@ export default function App() {
               </div>
             </section>
 
-            {}
-            {/* 2. 車輛與行車成本 (核心亮點) */}
+            {/* 2. 車輛與行車成本 */}
             <section className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm">
               <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
                 <div className="flex items-center gap-2">
@@ -656,21 +588,11 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* 租車費用輸入 (若有勾選) */}
                 {isRental && (
                   <div className="sm:col-span-2 bg-blue-50/60 p-3.5 rounded-xl border border-blue-100">
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs font-semibold text-blue-900">
-                        總租車費用 (含免責補償 CDW / NOC / 安心險)
-                      </label>
-                      <span className="text-xs text-blue-700 font-medium">
-                        約 {currSymbol} {days > 0 ? Math.round(rentalCost / days).toLocaleString() : 0} /天
-                        {currency === 'JPY' && (
-                          <span className="text-blue-500 ml-1">
-                            (約 NT$ {days > 0 ? Math.round((rentalCost * exchangeRate) / days).toLocaleString() : 0})
-                          </span>
-                        )}
-                      </span>
+                      <label className="text-xs font-semibold text-blue-900">總租車費用 (含免責補償 CDW / NOC)</label>
+                      <span className="text-xs text-blue-700">約 {currSymbol} {days > 0 ? Math.round(rentalCost / days).toLocaleString() : 0} /天</span>
                     </div>
                     <div className="relative">
                       <span className="absolute left-3.5 top-2 text-sm text-slate-400 font-semibold">{currSymbol}</span>
@@ -679,35 +601,28 @@ export default function App() {
                         min="0"
                         value={rentalCost}
                         onChange={(e) => setRentalCost(Number(e.target.value))}
-                        className="w-full pl-11 pr-3.5 py-2 text-sm rounded-lg border border-blue-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
+                        className="w-full pl-11 pr-3.5 py-2 text-sm rounded-lg border border-blue-200 bg-white font-medium focus:outline-none"
                       />
                     </div>
                   </div>
                 )}
 
-                {/* 預估里程 */}
                 <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">預估總里程</label>
-                  </div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">預估總里程</label>
                   <div className="relative">
                     <input
                       type="number"
                       min="0"
                       value={distanceKm}
                       onChange={(e) => setDistanceKm(Number(e.target.value))}
-                      className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                      placeholder="例：300"
+                      className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none"
                     />
-                    <span className="absolute right-3 top-2.5 text-xs text-slate-400">公里 (km)</span>
+                    <span className="absolute right-3 top-2.5 text-xs text-slate-400">km</span>
                   </div>
                 </div>
 
-                {/* 車輛平均油耗 */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
-                    平均油耗表現
-                  </label>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">平均油耗表現</label>
                   <div className="relative">
                     <input
                       type="number"
@@ -715,17 +630,15 @@ export default function App() {
                       min="1"
                       value={fuelEfficiency}
                       onChange={(e) => setFuelEfficiency(Number(e.target.value))}
-                      className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                      placeholder="例：15.0"
+                      className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none"
                     />
                     <span className="absolute right-3 top-2.5 text-xs text-slate-400">km / L</span>
                   </div>
                 </div>
 
-                {/* 每公升油價 */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
-                    每公升油價 {currency === 'JPY' ? '(日本 Regular 約 170~178 円)' : '(95無鉛)'}
+                    每公升油價 {currency === 'JPY' ? '(約 170~180 円)' : '(95無鉛)'}
                   </label>
                   <div className="relative">
                     <input
@@ -734,18 +647,16 @@ export default function App() {
                       min="0"
                       value={fuelPrice}
                       onChange={(e) => setFuelPrice(Number(e.target.value))}
-                      className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                      placeholder={currency === 'JPY' ? '175' : '31.2'}
+                      className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none"
                     />
                     <span className="absolute right-3 top-2.5 text-xs text-slate-400">{currSymbol} / L</span>
                   </div>
                 </div>
 
-                {/* 高速公路收費與停車費 */}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
-                      {currency === 'JPY' ? 'ETC 高速費 / 周遊券' : 'eTag 通行費'}
+                      {currency === 'JPY' ? 'ETC 高速費' : 'eTag 通行費'}
                     </label>
                     <div className="relative">
                       <input
@@ -753,22 +664,20 @@ export default function App() {
                         min="0"
                         value={tollCost}
                         onChange={(e) => setTollCost(Number(e.target.value))}
-                        className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                        className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none"
                       />
                       <span className="absolute right-2.5 top-2.5 text-xs text-slate-400">{currUnit}</span>
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
-                      停車費預算
-                    </label>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">停車費預算</label>
                     <div className="relative">
                       <input
                         type="number"
                         min="0"
                         value={parkingCost}
                         onChange={(e) => setParkingCost(Number(e.target.value))}
-                        className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                        className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none"
                       />
                       <span className="absolute right-2.5 top-2.5 text-xs text-slate-400">{currUnit}</span>
                     </div>
@@ -776,25 +685,18 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 即時油耗預估摘要小貼士 */}
               <div className="mt-4 p-3 bg-amber-50/70 border border-amber-200/60 rounded-xl flex items-center justify-between text-xs text-amber-800">
                 <div className="flex items-center gap-2">
                   <Fuel className="w-4 h-4 text-amber-600 shrink-0" />
                   <span>預估消耗 <strong>{calculations.fuelLiters}</strong> 公升油料</span>
                 </div>
                 <span className="font-bold text-amber-900">
-                  油資試算：{currSymbol} {calculations.totalFuelCost.toLocaleString()}
-                  {currency === 'JPY' && (
-                    <span className="font-normal text-amber-700 ml-1">
-                      (約 NT$ {Math.round(calculations.totalFuelCost * exchangeRate).toLocaleString()})
-                    </span>
-                  )}
+                  油資：{currSymbol} {calculations.totalFuelCost.toLocaleString()}
                 </span>
               </div>
             </section>
 
-            {}
-            {/* 3. 住宿、餐飲與其他生活支出 */}
+            {/* 3. 住宿生活費用 */}
             <section className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm">
               <div className="flex items-center gap-2 pb-3 mb-4 border-b border-slate-100">
                 <Receipt className="w-4 h-4 text-emerald-600" />
@@ -802,16 +704,9 @@ export default function App() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                      <Hotel className="w-3.5 h-3.5 text-emerald-600" /> 住宿總費用
-                    </label>
-                    {currency === 'JPY' && (
-                      <span className="text-[11px] text-slate-400">
-                        約 NT$ {Math.round(accommodation * exchangeRate).toLocaleString()}
-                      </span>
-                    )}
-                  </div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
+                    <Hotel className="w-3.5 h-3.5 text-emerald-600" /> 住宿總費用
+                  </label>
                   <div className="relative">
                     <span className="absolute left-3.5 top-2 text-xs text-slate-400 font-semibold">{currSymbol}</span>
                     <input
@@ -819,22 +714,15 @@ export default function App() {
                       min="0"
                       value={accommodation}
                       onChange={(e) => setAccommodation(Number(e.target.value))}
-                      className="w-full pl-10 pr-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                      className="w-full pl-10 pr-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                      <Utensils className="w-3.5 h-3.5 text-rose-500" /> 餐飲美食預算
-                    </label>
-                    {currency === 'JPY' && (
-                      <span className="text-[11px] text-slate-400">
-                        約 NT$ {Math.round(food * exchangeRate).toLocaleString()}
-                      </span>
-                    )}
-                  </div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
+                    <Utensils className="w-3.5 h-3.5 text-rose-500" /> 餐飲美食預算
+                  </label>
                   <div className="relative">
                     <span className="absolute left-3.5 top-2 text-xs text-slate-400 font-semibold">{currSymbol}</span>
                     <input
@@ -842,22 +730,15 @@ export default function App() {
                       min="0"
                       value={food}
                       onChange={(e) => setFood(Number(e.target.value))}
-                      className="w-full pl-10 pr-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all"
+                      className="w-full pl-10 pr-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                      <Ticket className="w-3.5 h-3.5 text-purple-500" /> 景點門票與體驗活動
-                    </label>
-                    {currency === 'JPY' && (
-                      <span className="text-[11px] text-slate-400">
-                        約 NT$ {Math.round(ticket * exchangeRate).toLocaleString()}
-                      </span>
-                    )}
-                  </div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
+                    <Ticket className="w-3.5 h-3.5 text-purple-500" /> 景點門票與體驗
+                  </label>
                   <div className="relative">
                     <span className="absolute left-3.5 top-2 text-xs text-slate-400 font-semibold">{currSymbol}</span>
                     <input
@@ -865,22 +746,15 @@ export default function App() {
                       min="0"
                       value={ticket}
                       onChange={(e) => setTicket(Number(e.target.value))}
-                      className="w-full pl-10 pr-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all"
+                      className="w-full pl-10 pr-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                      <DollarSign className="w-3.5 h-3.5 text-slate-500" /> 其他雜費與備用金
-                    </label>
-                    {currency === 'JPY' && (
-                      <span className="text-[11px] text-slate-400">
-                        約 NT$ {Math.round(misc * exchangeRate).toLocaleString()}
-                      </span>
-                    )}
-                  </div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
+                    <DollarSign className="w-3.5 h-3.5 text-slate-500" /> 其他雜費與備用金
+                  </label>
                   <div className="relative">
                     <span className="absolute left-3.5 top-2 text-xs text-slate-400 font-semibold">{currSymbol}</span>
                     <input
@@ -888,32 +762,29 @@ export default function App() {
                       min="0"
                       value={misc}
                       onChange={(e) => setMisc(Number(e.target.value))}
-                      className="w-full pl-10 pr-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-slate-500/20 focus:border-slate-500 transition-all"
+                      className="w-full pl-10 pr-3.5 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none"
                     />
                   </div>
                 </div>
               </div>
             </section>
 
-            {}
-            {/* 4. 沿途停靠站與景點清單 */}
+            {/* 4. 行程停靠點 */}
             <section className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm">
               <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
                 <div className="flex items-center gap-2">
                   <MapPin className="w-4 h-4 text-indigo-600" />
                   <h2 className="font-semibold text-slate-800 text-base">行程與停靠站規劃 ({itinerary.length})</h2>
                 </div>
-                <span className="text-xs text-slate-400">依天數紀錄重點站點</span>
               </div>
 
-              {/* 新增站點表單 */}
-              <form onSubmit={handleAddSpot} className="mb-4 bg-slate-50 p-3.5 rounded-xl border border-slate-200/70 space-y-3">
+              <form onSubmit={handleAddSpot} className="mb-4 bg-slate-50 p-3 rounded-xl border border-slate-200/70 space-y-2">
                 <div className="grid grid-cols-12 gap-2">
                   <div className="col-span-3 sm:col-span-2">
                     <select
                       value={newSpot.day}
                       onChange={(e) => setNewSpot({ ...newSpot, day: Number(e.target.value) })}
-                      className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white font-medium"
+                      className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white"
                     >
                       {Array.from({ length: days }, (_, i) => i + 1).map((d) => (
                         <option key={d} value={d}>第 {d} 天</option>
@@ -931,10 +802,10 @@ export default function App() {
                   <div className="col-span-6 sm:col-span-5">
                     <input
                       type="text"
-                      placeholder="景點 / 道之驛(休息站) / 餐廳"
+                      placeholder="景點 / 休息站 / 餐廳"
                       value={newSpot.spot}
                       onChange={(e) => setNewSpot({ ...newSpot, spot: e.target.value })}
-                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white"
                     />
                   </div>
                   <div className="col-span-12 sm:col-span-3 flex gap-1.5">
@@ -943,13 +814,13 @@ export default function App() {
                       onChange={(e) => setNewSpot({ ...newSpot, category: e.target.value })}
                       className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white"
                     >
-                      <option value="spot">景點觀光</option>
-                      <option value="food">用餐休息</option>
-                      <option value="drive">長途行車</option>
+                      <option value="spot">景點</option>
+                      <option value="food">用餐</option>
+                      <option value="drive">行車</option>
                     </select>
                     <button
                       type="submit"
-                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center justify-center shrink-0"
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shrink-0"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
@@ -957,61 +828,43 @@ export default function App() {
                 </div>
               </form>
 
-              {/* 站點清單 */}
               <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                {itinerary.length === 0 ? (
-                  <div className="text-center py-6 text-slate-400 text-xs">
-                    目前尚未新增停靠點，點擊上方表單加入第一站吧！
-                  </div>
-                ) : (
-                  itinerary.map((item) => (
-                    <div
-                      key={item.id}
-                      className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-white hover:border-slate-200 hover:shadow-xs transition-all text-xs"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-indigo-100 text-indigo-700">
-                          Day {item.day}
-                        </span>
-                        <span className="text-slate-400 font-mono text-[11px]">{item.time}</span>
-                        <span className="font-semibold text-slate-800">{item.spot}</span>
-                        {item.note && (
-                          <span className="text-slate-400 hidden sm:inline">- {item.note}</span>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => handleDeleteSpot(item.id)}
-                        className="text-slate-300 hover:text-rose-500 p-1 rounded transition-colors"
-                        title="刪除此站點"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                {itinerary.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-white text-xs"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 rounded font-bold text-[10px] bg-indigo-100 text-indigo-700">
+                        Day {item.day}
+                      </span>
+                      <span className="text-slate-400 font-mono text-[11px]">{item.time}</span>
+                      <span className="font-semibold text-slate-800">{item.spot}</span>
                     </div>
-                  ))
-                )}
+                    <button
+                      onClick={() => handleDeleteSpot(item.id)}
+                      className="text-slate-300 hover:text-rose-500 p-1 rounded transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
               </div>
             </section>
           </div>
 
-          {}
-          {/* ================= 右側：即時彙整面板 (5 欄寬，Sticky) ================= */}
+          {/* 右側：即時彙整面板 (Sticky) */}
           <div className="lg:col-span-5 lg:sticky lg:top-20 space-y-6">
             
-            {/* 總開銷與人均核心卡片 (雙幣別呈現) */}
-            <div className="bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 rounded-3xl p-6 text-white shadow-xl shadow-indigo-950/20 relative overflow-hidden">
-              {/* 背景微光裝飾 */}
-              <div className="absolute -right-10 -bottom-10 w-48 h-48 bg-rose-500/10 rounded-full blur-2xl pointer-events-none" />
-              <div className="absolute -left-10 -top-10 w-48 h-48 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
-
+            <div className="bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
               <div className="relative z-10">
                 <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
                   <span>總預估開銷 (全體 {passengers} 人)</span>
                   <span className="bg-white/10 px-2.5 py-0.5 rounded-full text-indigo-200 font-medium">
-                    {days} 天 {passengers} 人同行
+                    {days} 天 {passengers} 人
                   </span>
                 </div>
 
-                {/* 主幣別總金額 */}
                 <div className="flex items-baseline gap-2 mb-1">
                   <span className="text-sm text-indigo-300 font-bold">{currSymbol}</span>
                   <span className="text-3xl sm:text-4xl font-black tracking-tight text-white">
@@ -1019,14 +872,12 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* 換算次幣別標註 */}
                 <div className="text-xs text-emerald-400 font-semibold mb-4 flex items-center gap-1">
                   <ArrowRightLeft className="w-3 h-3 inline" />
-                  <span>約 {currency === 'JPY' ? 'NT$' : '¥'} {calculations.convertedGrandTotal.toLocaleString()} {currency === 'JPY' ? '台幣' : '日圓'}</span>
-                  <span className="text-slate-400 text-[10px] font-normal">(匯率 1 JPY = {exchangeRate} TWD)</span>
+                  <span>約 {currency === 'JPY' ? 'NT$' : '¥'} {calculations.convertedGrandTotal.toLocaleString()}</span>
+                  <span className="text-slate-400 text-[10px] font-normal">(1 JPY = {exchangeRate} TWD)</span>
                 </div>
 
-                {/* 每人分攤亮點卡片 */}
                 <div className="bg-white/10 backdrop-blur-md rounded-2xl p-3.5 border border-white/10 flex items-center justify-between">
                   <div>
                     <div className="text-[11px] text-indigo-200 font-medium flex items-center gap-1">
@@ -1050,35 +901,32 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 關鍵指標行 */}
                 <div className="grid grid-cols-3 gap-2 mt-4 pt-4 border-t border-white/10 text-center">
                   <div>
                     <div className="text-[10px] text-slate-400">總行駛里程</div>
-                    <div className="text-xs sm:text-sm font-bold text-white mt-0.5">{distanceKm} km</div>
+                    <div className="text-xs font-bold text-white mt-0.5">{distanceKm} km</div>
                   </div>
                   <div>
                     <div className="text-[10px] text-slate-400">每公里成本</div>
-                    <div className="text-xs sm:text-sm font-bold text-white mt-0.5">{currSymbol} {calculations.costPerKm}</div>
+                    <div className="text-xs font-bold text-white mt-0.5">{currSymbol} {calculations.costPerKm}</div>
                   </div>
                   <div>
                     <div className="text-[10px] text-slate-400">預估耗油量</div>
-                    <div className="text-xs sm:text-sm font-bold text-white mt-0.5">{calculations.fuelLiters} L</div>
+                    <div className="text-xs font-bold text-white mt-0.5">{calculations.fuelLiters} L</div>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* 開銷佔比分析面板 */}
+            {/* 開銷佔比分析 */}
             <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm">
               <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
                 <div className="flex items-center gap-2">
                   <PieChart className="w-4 h-4 text-indigo-600" />
-                  <h3 className="font-semibold text-slate-800 text-sm">各類費用分佈與佔比</h3>
+                  <h3 className="font-semibold text-slate-800 text-sm">各類費用分佈</h3>
                 </div>
-                <span className="text-[11px] text-slate-400">即時雙幣計算</span>
               </div>
 
-              {/* 橫向堆疊色彩條 */}
               <div className="w-full h-3 rounded-full bg-slate-100 overflow-hidden flex mb-4">
                 {calculations.categories.map((cat, idx) => {
                   const percentage = calculations.grandTotal > 0 
@@ -1089,13 +937,11 @@ export default function App() {
                       key={idx}
                       style={{ width: `${percentage}%` }}
                       className={`${cat.color} h-full transition-all duration-300`}
-                      title={`${cat.name}: ${currSymbol} ${cat.amount.toLocaleString()} (${percentage.toFixed(1)}%)`}
                     />
                   );
                 })}
               </div>
 
-              {/* 詳細細項清單 */}
               <div className="space-y-2.5">
                 {calculations.categories.map((cat, idx) => {
                   const pct = calculations.grandTotal > 0 
@@ -1123,42 +969,16 @@ export default function App() {
                   );
                 })}
               </div>
-
-              {/* 車輛 vs 生活開銷二分比對 */}
-              <div className="mt-5 pt-4 border-t border-slate-100 grid grid-cols-2 gap-3">
-                <div className="bg-slate-50 p-3 rounded-xl">
-                  <span className="text-[10px] text-slate-500 font-medium block mb-0.5">行車交通相關</span>
-                  <span className="text-sm font-bold text-slate-800">
-                    {currSymbol} {calculations.drivingTotal.toLocaleString()}
-                  </span>
-                  <span className="text-[10px] text-emerald-600 block mt-0.5">
-                    ≈ {currency === 'JPY' ? 'NT$' : '¥'} {calculations.convertedDrivingTotal.toLocaleString()}
-                  </span>
-                </div>
-                <div className="bg-slate-50 p-3 rounded-xl">
-                  <span className="text-[10px] text-slate-500 font-medium block mb-0.5">住宿生活相關</span>
-                  <span className="text-sm font-bold text-slate-800">
-                    {currSymbol} {calculations.otherTotal.toLocaleString()}
-                  </span>
-                  <span className="text-[10px] text-emerald-600 block mt-0.5">
-                    ≈ {currency === 'JPY' ? 'NT$' : '¥'} {calculations.convertedOtherTotal.toLocaleString()}
-                  </span>
-                </div>
-              </div>
             </div>
 
-            {}
-            {/* 日本自駕實用小貼士卡片 */}
+            {/* 自駕貼士 */}
             <div className="bg-rose-50/80 border border-rose-200/70 rounded-2xl p-4 text-xs text-rose-950 flex items-start gap-3">
               <Sparkles className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <span className="font-bold block text-rose-900">🇯🇵 日本自駕注意事項與省錢指南</span>
-                <ul className="list-disc list-inside space-y-1 text-rose-800/90 text-[11px] leading-relaxed">
-                  <li><strong>右駕靠左行駛</strong>：右轉為大轉彎、左轉為小轉彎，雨刷與方向燈位置相反。</li>
-                  <li><strong>安心險不可省</strong>：強烈建議加購免責賠償 (CDW) 與營業損失賠償 (NOC)。</li>
-                  <li><strong>ETC & 高速公路周遊券</strong>：長途跨區推薦租借 ETC 卡並搭配 HEP/KEP 等周遊券省下過路費。</li>
-                  <li><strong>加油種類</strong>：一般租賃轎車多加 <strong>レギュラー (Regular / 紅色油槍)</strong>，還車前務必滿油還車並保留加油發票。</li>
-                </ul>
+                <span className="font-bold block text-rose-900">自駕注意事項</span>
+                <p className="text-rose-800/90 text-[11px] leading-relaxed">
+                  日本自駕請記得攜帶駕照日文譯本與台灣駕照正本。上路務必加保 CDW 與 NOC 保險，行駛高速公路建議向租車公司租借 ETC 卡更划算！
+                </p>
               </div>
             </div>
 

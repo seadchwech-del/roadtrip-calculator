@@ -17,7 +17,7 @@ import {
   Loader2,
   Calendar,
   Wallet,
-  Sparkles
+  ShieldCheck
 } from 'lucide-react';
 
 const CATEGORIES = [
@@ -32,11 +32,23 @@ const CATEGORIES = [
 
 const STORAGE_KEY = 'roadtrip_unified_split_v3';
 
+// SEC-01 資安加固：CSV 公式注入過濾函式 (防範 CWE-1236 / DDE 執行攻擊)
+const sanitizeCSVCell = (val) => {
+  if (val === null || val === undefined) return '""';
+  let str = String(val).trim();
+  // 若開頭為 =, +, -, @, \t, \r，強制在前方加上單引號避免 Excel 視為公式執行
+  if (/^[=+\-@\t\r]/.test(str)) {
+    str = "'" + str;
+  }
+  return `"${str.replace(/"/g, '""')}"`;
+};
+
 export default function App() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [lastSavedTime, setLastSavedTime] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [validationError, setValidationError] = useState('');
 
   // 1. 行程基本設定
   const [tripName, setTripName] = useState('沖繩自駕環島 4 天 3 夜');
@@ -112,29 +124,74 @@ export default function App() {
     date: 'Day 1'
   });
 
+  // SEC-04 資安加固：LocalStorage 防禦性讀取與結構驗證
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const data = JSON.parse(saved);
-        if (data.tripName !== undefined) setTripName(data.tripName);
-        if (data.days !== undefined) setDays(data.days);
-        if (data.currency !== undefined) setCurrency(data.currency);
-        if (data.exchangeRate !== undefined) setExchangeRate(data.exchangeRate);
-        if (data.fuelCalc !== undefined) setFuelCalc(data.fuelCalc);
-        if (data.members !== undefined && data.members.length > 0) {
-          setMembers(data.members);
-          setNewExpense((prev) => ({ ...prev, payer: data.members[0], splitWith: data.members }));
+        if (typeof data.tripName === 'string') {
+          setTripName(data.tripName.slice(0, 100));
         }
-        if (data.expenses !== undefined) setExpenses(data.expenses);
+        if (typeof data.days === 'number' && data.days >= 1 && data.days <= 100) {
+          setDays(data.days);
+        }
+        if (typeof data.currency === 'string' && ['JPY', 'TWD'].includes(data.currency)) {
+          setCurrency(data.currency);
+        }
+        if (typeof data.exchangeRate === 'number' && data.exchangeRate > 0.0001 && data.exchangeRate < 1000) {
+          setExchangeRate(data.exchangeRate);
+        }
+        if (data.fuelCalc && typeof data.fuelCalc === 'object') {
+          setFuelCalc({
+            distanceKm: Math.min(Math.max(0, Number(data.fuelCalc.distanceKm) || 0), 100000),
+            fuelEfficiency: Math.min(Math.max(0.1, Number(data.fuelCalc.fuelEfficiency) || 16.5), 200),
+            fuelPrice: Math.min(Math.max(0, Number(data.fuelCalc.fuelPrice) || 0), 10000),
+            currency: ['JPY', 'TWD'].includes(data.fuelCalc.currency) ? data.fuelCalc.currency : 'JPY',
+            driver: typeof data.fuelCalc.driver === 'string' ? data.fuelCalc.driver.slice(0, 30) : 'Alex'
+          });
+        }
+        if (Array.isArray(data.members) && data.members.every((m) => typeof m === 'string')) {
+          const cleanMembers = data.members.map((m) => m.slice(0, 30)).filter(Boolean).slice(0, 20);
+          if (cleanMembers.length > 0) {
+            setMembers(cleanMembers);
+            setNewExpense((prev) => ({
+              ...prev,
+              payer: cleanMembers[0],
+              splitWith: cleanMembers
+            }));
+          }
+        }
+        if (Array.isArray(data.expenses)) {
+          const cleanExpenses = data.expenses
+            .filter(
+              (exp) =>
+                exp &&
+                typeof exp.title === 'string' &&
+                typeof exp.amount === 'number' &&
+                exp.amount > 0 &&
+                exp.amount <= 100000000
+            )
+            .map((exp) => ({
+              ...exp,
+              title: exp.title.slice(0, 80),
+              payer: String(exp.payer || '').slice(0, 30),
+              date: String(exp.date || '').slice(0, 20),
+              currency: ['JPY', 'TWD'].includes(exp.currency) ? exp.currency : 'JPY',
+              splitWith: Array.isArray(exp.splitWith) ? exp.splitWith.map((s) => String(s).slice(0, 30)) : []
+            }))
+            .slice(0, 500);
+          setExpenses(cleanExpenses);
+        }
       }
     } catch (e) {
-      console.error('LocalStorage 讀取失敗:', e);
+      console.warn('LocalStorage 結構有誤或已遭篡改，重置為預設狀態:', e);
     } finally {
       setIsLoaded(true);
     }
   }, []);
 
+  // 自動防抖儲存至 LocalStorage
   useEffect(() => {
     if (!isLoaded) return;
     setIsSaving(true);
@@ -160,11 +217,19 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [isLoaded, tripName, days, currency, exchangeRate, members, fuelCalc, expenses]);
 
-  // 1. 車輛油資即時試算
+  // SEC-02 資安加固：匯率輸入邊界控制
+  const handleExchangeRateChange = (val) => {
+    const num = parseFloat(val);
+    if (!isNaN(num) && num > 0.0001 && num < 1000) {
+      setExchangeRate(Number(num.toFixed(4)));
+    }
+  };
+
+  // 1. 車輛油資即時試算 (加入零與無效值防呆)
   const fuelResult = useMemo(() => {
-    const km = Number(fuelCalc.distanceKm) || 0;
-    const eff = Number(fuelCalc.fuelEfficiency) > 0 ? Number(fuelCalc.fuelEfficiency) : 1;
-    const price = Number(fuelCalc.fuelPrice) || 0;
+    const km = Math.max(0, Math.min(100000, Number(fuelCalc.distanceKm) || 0));
+    const eff = Number(fuelCalc.fuelEfficiency) > 0.1 ? Number(fuelCalc.fuelEfficiency) : 1;
+    const price = Math.max(0, Math.min(10000, Number(fuelCalc.fuelPrice) || 0));
     const liters = km / eff;
     const totalCost = Math.round(liters * price);
     return {
@@ -175,7 +240,7 @@ export default function App() {
 
   // 2. 多人收支平衡與最佳化轉帳演算法 (全部統一新台幣 TWD 結算)
   const stats = useMemo(() => {
-    const rate = Number(exchangeRate) > 0 ? Number(exchangeRate) : 0.215;
+    const rate = Number(exchangeRate) > 0.0001 && Number(exchangeRate) < 1000 ? Number(exchangeRate) : 0.215;
 
     const toTwd = (amount, cur) => {
       const num = Number(amount) || 0;
@@ -211,7 +276,7 @@ export default function App() {
 
       // 分攤對象分帳
       const targets = item.splitWith && item.splitWith.length > 0 ? item.splitWith : members;
-      const share = twd / targets.length;
+      const share = targets.length > 0 ? twd / targets.length : 0;
       targets.forEach((tm) => {
         if (memberMap[tm]) {
           memberMap[tm].owedTwd += share;
@@ -294,11 +359,19 @@ export default function App() {
     setExpenses([newFuelItem, ...expenses]);
   };
 
-  // 新增旅伴
+  // SEC-02 資安加固：旅伴輸入防呆（字數限制 30 字、重複檢查、最多 20 人）
   const handleAddMember = (e) => {
     e.preventDefault();
-    const name = newMemberName.trim();
-    if (!name || members.includes(name)) return;
+    const name = newMemberName.trim().slice(0, 30);
+    if (!name) return;
+    if (members.length >= 20) {
+      alert('旅伴人數上限為 20 人');
+      return;
+    }
+    if (members.includes(name)) {
+      alert('該旅伴名稱已存在');
+      return;
+    }
     const updated = [...members, name];
     setMembers(updated);
     setNewMemberName('');
@@ -307,7 +380,10 @@ export default function App() {
 
   // 刪除旅伴
   const handleDeleteMember = (name) => {
-    if (members.length <= 1) return;
+    if (members.length <= 1) {
+      alert('至少需保留一名旅伴');
+      return;
+    }
     const updated = members.filter((m) => m !== name);
     setMembers(updated);
     if (fuelCalc.driver === name) {
@@ -316,26 +392,50 @@ export default function App() {
     setExpenses(
       expenses.map((exp) => ({
         ...exp,
-        payer: exp.payer === name ? (updated[0] || '未知') : exp.payer,
+        payer: exp.payer === name ? updated[0] || '未知' : exp.payer,
         splitWith: exp.splitWith.filter((m) => m !== name)
       }))
     );
   };
 
-  // 新增一般支出
+  // SEC-02 資安加固：一般支出送出時的數值與邊界強制驗證
   const handleAddExpense = (e) => {
     e.preventDefault();
-    if (!newExpense.title.trim() || !newExpense.amount || Number(newExpense.amount) <= 0) return;
-    if (!newExpense.splitWith || newExpense.splitWith.length === 0) return;
+    setValidationError('');
+
+    const cleanTitle = newExpense.title.trim().slice(0, 80);
+    if (!cleanTitle) {
+      setValidationError('請輸入費用項目名稱');
+      return;
+    }
+
+    const amt = Number(newExpense.amount);
+    if (isNaN(amt) || amt <= 0 || amt > 100000000) {
+      setValidationError('消費金額必須介於 1 至 100,000,000 之間');
+      return;
+    }
+
+    if (!newExpense.splitWith || newExpense.splitWith.length === 0) {
+      setValidationError('請至少選擇一位分攤費用的對象');
+      return;
+    }
+
+    if (expenses.length >= 500) {
+      alert('費用筆數已達上限 (500 筆)');
+      return;
+    }
 
     setExpenses([
-      ...expenses,
       {
         ...newExpense,
+        title: cleanTitle,
+        date: (newExpense.date || '記帳').trim().slice(0, 20),
         id: Date.now().toString(),
-        amount: Number(newExpense.amount)
-      }
+        amount: Math.round(amt)
+      },
+      ...expenses
     ]);
+
     setNewExpense({
       ...newExpense,
       title: '',
@@ -358,29 +458,46 @@ export default function App() {
     }
   };
 
+  // SEC-01 資安加固：CSV 匯出使用全面消毒邏輯
   const handleExportCSV = () => {
-    const headers = ['項目編號', '日期/行程', '費用類別', '支出項目說明', '墊付人', '原幣別', '原幣金額', '統一換算台幣 (TWD)', '分攤人數', '分攤對象清單'];
+    const headers = [
+      '項目編號',
+      '日期/行程',
+      '費用類別',
+      '支出項目說明',
+      '墊付人',
+      '原幣別',
+      '原幣金額',
+      '統一換算台幣 (TWD)',
+      '分攤人數',
+      '分攤對象清單'
+    ];
+
     const rows = expenses.map((exp, idx) => {
       const twd = stats.toTwd(exp.amount, exp.currency);
       const catObj = CATEGORIES.find((c) => c.id === exp.category);
       return [
         idx + 1,
-        exp.date || '',
-        catObj ? catObj.label : '其他',
-        `"${exp.title.replace(/"/g, '""')}"`,
-        exp.payer,
-        exp.currency,
-        exp.amount,
+        sanitizeCSVCell(exp.date || ''),
+        sanitizeCSVCell(catObj ? catObj.label : '其他'),
+        sanitizeCSVCell(exp.title),
+        sanitizeCSVCell(exp.payer),
+        sanitizeCSVCell(exp.currency),
+        Number(exp.amount) || 0,
         twd,
         exp.splitWith.length,
-        `"${exp.splitWith.join('、')}"`
+        sanitizeCSVCell(exp.splitWith.join('、'))
       ];
     });
 
     rows.push([]);
-    rows.push(['--- 最終最佳結清轉帳方案 (新台幣 TWD) ---']);
+    rows.push([sanitizeCSVCell('--- 最終最佳結清轉帳方案 (新台幣 TWD) ---')]);
     stats.settlements.forEach((s) => {
-      rows.push([`${s.from} 應轉帳給 ${s.to}`, `NT$ ${s.amountTwd.toLocaleString()}`, `(約 ¥ ${s.amountJpy.toLocaleString()})`]);
+      rows.push([
+        sanitizeCSVCell(`${s.from} 應轉帳給 ${s.to}`),
+        sanitizeCSVCell(`NT$ ${s.amountTwd.toLocaleString()}`),
+        sanitizeCSVCell(`(約 ¥ ${s.amountJpy.toLocaleString()})`)
+      ]);
     });
 
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
@@ -388,10 +505,12 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `${tripName}_自駕旅費結算報表.csv`);
+    const safeTripFileName = tripName.replace(/[\\/:*?"<>|]/g, '_').slice(0, 30);
+    link.setAttribute('download', `${safeTripFileName}_自駕旅費結算報表.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handlePrintPDF = () => {
@@ -454,7 +573,12 @@ export default function App() {
               <Car className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="font-bold text-base sm:text-lg text-slate-900 leading-tight">自駕旅行拆帳神器</h1>
+              <div className="flex items-center gap-1.5">
+                <h1 className="font-bold text-base sm:text-lg text-slate-900 leading-tight">自駕旅行拆帳神器</h1>
+                <span className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-100 text-emerald-700 rounded-md">
+                  <ShieldCheck className="w-3 h-3" /> 資安加固版
+                </span>
+              </div>
               <p className="text-[11px] text-slate-500">Road Trip Splitwise & Gas Calculator</p>
             </div>
           </div>
@@ -481,7 +605,7 @@ export default function App() {
             <button
               onClick={handleExportCSV}
               className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-700 transition-colors"
-              title="匯出 Excel CSV 報表"
+              title="匯出經過公式注入過濾的 Excel CSV 報表"
             >
               <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
               <span className="hidden md:inline">匯出 Excel</span>
@@ -514,8 +638,9 @@ export default function App() {
             <div className="flex items-center gap-2">
               <input
                 type="text"
+                maxLength={80}
                 value={tripName}
-                onChange={(e) => setTripName(e.target.value)}
+                onChange={(e) => setTripName(e.target.value.slice(0, 80))}
                 className="bg-transparent font-bold text-lg sm:text-xl text-white border-b border-white/20 focus:border-amber-400 focus:outline-none px-1 py-0.5 w-full max-w-md"
                 placeholder="行程名稱 (例：沖繩自駕 4 天 3 夜)"
               />
@@ -526,14 +651,15 @@ export default function App() {
                 <input
                   type="number"
                   min="1"
+                  max="90"
                   value={days}
-                  onChange={(e) => setDays(Math.max(1, parseInt(e.target.value) || 1))}
+                  onChange={(e) => setDays(Math.min(90, Math.max(1, parseInt(e.target.value) || 1)))}
                   className="w-10 bg-transparent text-white font-bold text-center focus:outline-none"
                 />
                 <span className="text-slate-300">天</span>
               </div>
               <span className="text-slate-500">|</span>
-              <span>統一以新台幣 (TWD) 自動清算與結算</span>
+              <span>統一以新台幣 (TWD) 自動清算</span>
             </div>
           </div>
 
@@ -544,10 +670,11 @@ export default function App() {
               <input
                 type="number"
                 step="0.001"
-                min="0.01"
+                min="0.001"
+                max="1000"
                 value={exchangeRate}
-                onChange={(e) => setExchangeRate(parseFloat(e.target.value) || 0.215)}
-                className="w-16 px-1.5 py-0.5 bg-white/20 text-white rounded font-mono font-bold text-center focus:outline-none focus:ring-1 focus:ring-amber-300"
+                onChange={(e) => handleExchangeRateChange(e.target.value)}
+                className="w-20 px-1.5 py-0.5 bg-white/20 text-white rounded font-mono font-bold text-center focus:outline-none focus:ring-1 focus:ring-amber-300"
               />
               <span className="text-slate-200 font-medium">TWD</span>
             </div>
@@ -559,7 +686,7 @@ export default function App() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-3 border-b border-slate-100">
             <div className="flex items-center gap-2">
               <Users className="w-4 h-4 text-indigo-600" />
-              <h2 className="font-semibold text-slate-800 text-sm sm:text-base">同行旅伴管理 ({members.length} 人)</h2>
+              <h2 className="font-semibold text-slate-800 text-sm sm:text-base">同行旅伴管理 ({members.length}/20 人)</h2>
             </div>
             <span className="text-xs text-slate-400">點擊標籤旁的 × 可移除旅伴</span>
           </div>
@@ -587,6 +714,7 @@ export default function App() {
             <form onSubmit={handleAddMember} className="no-print flex items-center gap-1.5 ml-1">
               <input
                 type="text"
+                maxLength={30}
                 placeholder="新增旅伴姓名"
                 value={newMemberName}
                 onChange={(e) => setNewMemberName(e.target.value)}
@@ -626,8 +754,14 @@ export default function App() {
                     <input
                       type="number"
                       min="0"
+                      max="100000"
                       value={fuelCalc.distanceKm}
-                      onChange={(e) => setFuelCalc({ ...fuelCalc, distanceKm: Number(e.target.value) })}
+                      onChange={(e) =>
+                        setFuelCalc({
+                          ...fuelCalc,
+                          distanceKm: Math.min(100000, Math.max(0, Number(e.target.value) || 0))
+                        })
+                      }
                       className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
                     />
                     <span className="absolute right-2.5 top-1.5 text-xs text-slate-400">km</span>
@@ -640,9 +774,15 @@ export default function App() {
                     <input
                       type="number"
                       step="0.1"
-                      min="1"
+                      min="0.1"
+                      max="100"
                       value={fuelCalc.fuelEfficiency}
-                      onChange={(e) => setFuelCalc({ ...fuelCalc, fuelEfficiency: Number(e.target.value) })}
+                      onChange={(e) =>
+                        setFuelCalc({
+                          ...fuelCalc,
+                          fuelEfficiency: Math.min(100, Math.max(0.1, Number(e.target.value) || 0.1))
+                        })
+                      }
                       className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
                     />
                     <span className="absolute right-2.5 top-1.5 text-xs text-slate-400">km/L</span>
@@ -656,8 +796,14 @@ export default function App() {
                       type="number"
                       step="0.1"
                       min="0"
+                      max="1000"
                       value={fuelCalc.fuelPrice}
-                      onChange={(e) => setFuelCalc({ ...fuelCalc, fuelPrice: Number(e.target.value) })}
+                      onChange={(e) =>
+                        setFuelCalc({
+                          ...fuelCalc,
+                          fuelPrice: Math.min(1000, Math.max(0, Number(e.target.value) || 0))
+                        })
+                      }
                       className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
                     />
                     <span className="absolute right-2.5 top-1.5 text-xs text-slate-400">
@@ -687,7 +833,9 @@ export default function App() {
                     className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white font-medium"
                   >
                     {members.map((m) => (
-                      <option key={m} value={m}>{m}</option>
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -728,6 +876,12 @@ export default function App() {
                 <h2 className="font-semibold text-slate-800 text-sm sm:text-base">新增費用支出</h2>
               </div>
 
+              {validationError && (
+                <div className="p-2.5 mb-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-600 font-medium">
+                  ⚠️ {validationError}
+                </div>
+              )}
+
               <form onSubmit={handleAddExpense} className="space-y-3.5">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="sm:col-span-2">
@@ -735,6 +889,7 @@ export default function App() {
                     <input
                       type="text"
                       required
+                      maxLength={80}
                       placeholder="例：居酒屋晚餐、名護租車費、水族館門票"
                       value={newExpense.title}
                       onChange={(e) => setNewExpense({ ...newExpense, title: e.target.value })}
@@ -745,6 +900,7 @@ export default function App() {
                     <label className="block text-xs font-semibold text-slate-500 mb-1">消費時點 / 天數</label>
                     <input
                       type="text"
+                      maxLength={20}
                       placeholder="例：Day 1、Day 2、行前"
                       value={newExpense.date}
                       onChange={(e) => setNewExpense({ ...newExpense, date: e.target.value })}
@@ -762,7 +918,9 @@ export default function App() {
                       className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white font-medium"
                     >
                       {CATEGORIES.map((cat) => (
-                        <option key={cat.id} value={cat.id}>{cat.label}</option>
+                        <option key={cat.id} value={cat.id}>
+                          {cat.label}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -789,6 +947,7 @@ export default function App() {
                         type="number"
                         required
                         min="1"
+                        max="100000000"
                         placeholder="金額"
                         value={newExpense.amount}
                         onChange={(e) => setNewExpense({ ...newExpense, amount: e.target.value })}
@@ -806,7 +965,9 @@ export default function App() {
                     className="w-full sm:w-1/2 px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white font-bold text-indigo-700"
                   >
                     {members.map((m) => (
-                      <option key={m} value={m}>{m} 墊付</option>
+                      <option key={m} value={m}>
+                        {m} 墊付
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -896,7 +1057,9 @@ export default function App() {
                             <span className="font-bold text-slate-900 text-sm">{exp.title}</span>
                           </div>
                           <div className="text-slate-500 text-[11px] flex flex-wrap items-center gap-2">
-                            <span>由 <strong className="text-indigo-600">{exp.payer}</strong> 墊付</span>
+                            <span>
+                              由 <strong className="text-indigo-600">{exp.payer}</strong> 墊付
+                            </span>
                             <span>•</span>
                             <span>分攤：{isAll ? '所有人均攤' : exp.splitWith.join('、')}</span>
                           </div>
